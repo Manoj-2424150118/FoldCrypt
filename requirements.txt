@@ -1,0 +1,4 @@
+# FoldCrypt runtime dependencies
+# Tkinter is part of the Python standard library — the only third-party
+# package FoldCrypt needs is `cryptography` (Fernet + PBKDF2HMAC).
+cryptography
