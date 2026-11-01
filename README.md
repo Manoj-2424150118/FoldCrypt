@@ -91,6 +91,14 @@ A wrong password fails Fernet's HMAC verification, and the app reports
 | `logo.png` | App / window icon |
 | `eye_open.png` / `eye_closed.png` | Password-visibility toggle icons (text/emoji fallback if missing) |
 | `LICENSE` | MIT License |
+| `tests/test_lock_unlock.py` | Headless tests for the lock/unlock core (key derivation, encrypt/decrypt round-trip, wrong-password refusal) — no GUI needed |
+
+## 🧪 Tests
+
+```bash
+pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+```
 
 ---
 
