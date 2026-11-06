@@ -1,65 +1,69 @@
+<p align="center">
+  <img src="logo.png" alt="FoldCrypt logo" width="96"/>
+</p>
+
 # 🛡️ FoldCrypt
 
-**FoldCrypt** is a premium, cross-platform, smart locker application that securely encrypts, compresses, and hides your sensitive folders behind AES cryptography and a sleek, user-friendly graphical interface. 
+**Encrypt any folder into a single portable, password-locked `.fsl` file — and prove, on unlock, that every file inside came back exactly as it went in.**
 
-Instead of just changing system permissions, FoldCrypt physically zips and encrypts your entire folder structure using robust **Fernet (AES-128)** encryption with heavily salted **PBKDF2HMAC** key derivation. The result is a highly secure, portable `.fsl` (FoldCrypt Secure Locker) file that perfectly protects your data.
+FoldCrypt is a cross-platform desktop locker written in Python. It does not rely on folder permissions or hidden-folder tricks: the folder is archived, the archive is encrypted with **Fernet** (AES-128-CBC + HMAC-SHA256) under a key derived from your password with **PBKDF2-HMAC-SHA256 (480,000 iterations, fresh 16-byte random salt per lock)**, and a **SHA-256 integrity manifest** of every file is embedded inside the encrypted archive. On unlock, the restored folder is re-hashed against that manifest — if anything is missing, changed or unexpected, FoldCrypt fails loudly and keeps the `.fsl` instead of handing back a subtly wrong folder with a "success" message.
 
-## ✨ Features
-* **Bank-Grade Encryption:** Uses python's `cryptography` library for AES encryption and PBKDF2 hashing.
-* **Integrity-Verified Restore:** Every lock embeds a SHA-256 manifest of the folder's files inside the encrypted archive. Unlock re-hashes every restored file against it and fails loudly — keeping the `.fsl` — if anything is missing, changed, or unexpected, instead of handing back a subtly wrong folder with a "success" message. Archives locked by older versions (no manifest) still unlock normally.
-* **In-Place Archiving:** Instantly zips folders and converts them into a single, encrypted `.fsl` file.
-* **Portability:** Your encrypted `.fsl` file can be safely moved to a USB drive, another computer, or cloud storage. It will decrypt flawlessly anywhere as long as you have the password.
-* **Invisible by Default:** Automatically applies system-level hidden attributes to the locked `.fsl` files to keep them completely out of sight.
-* **Premium UX/UI:**
-  * Clean, centralized Tkinter interface using modern Google **Inter** typography.
-  * Real-time deterministic progress bars for live visual feedback during heavy IO operations.
-  * Interactive **"Eye"** icons to toggle password visibility.
-  * Intelligent, auto-closing custom dialog boxes that destroy themselves after 5 seconds to prevent desktop clutter.
-* **Explorer Integration:** Forces Windows File Explorer to instantly focus and highlight newly locked or unlocked items to give you immediate visual confirmation.
+**Repository:** [github.com/Manoj-2424150118/FoldCrypt](https://github.com/Manoj-2424150118/FoldCrypt) · **License:** MIT · **Platforms:** Windows, Linux, macOS (Python 3.8+)
+
+![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)
+![Cryptography](https://img.shields.io/badge/Cryptography-Fernet%20·%20PBKDF2-2f6f4e)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 ---
 
-## 🚀 Getting Started
+## Overview
 
-### Prerequisites
-Make sure you have Python 3.8 or higher installed on your machine. Tkinter ships
-with Python, so the only third-party dependency is the `cryptography` library —
-listed in `requirements.txt`:
-```bash
-pip install -r requirements.txt
-```
+Sensitive folders are usually "protected" by an OS account password or a hidden-folder setting — both of which evaporate the moment the drive is mounted elsewhere or the files are copied. FoldCrypt protects the *bytes themselves*:
 
-### Installation
-Clone this repository and navigate to the project folder:
-```bash
-git clone https://github.com/Manoj-2424150118/FoldCrypt.git
-cd FoldCrypt
-```
-Make sure `logo.png`, `eye_open.png`, and `eye_closed.png` are in the same directory as the main script for the UI to load perfectly.
+- **Lock** a folder in the GUI and it is replaced by one hidden `.fsl` file that can be moved to a USB drive, another computer or cloud storage, and unlocked anywhere with the password.
+- **Unlock** verifies twice: Fernet's HMAC proves the encrypted blob is untouched, and the embedded SHA-256 manifest proves the *extracted folder tree* is complete and identical to what was locked.
+- **No password recovery, by design.** A wrong password fails Fernet's authentication check and nothing is decrypted.
 
-### Running the Application
-Launch the graphical interface natively by executing:
-```bash
-pythonw main.py
-```
-*(Note: Using `pythonw` instead of `python` ensures the background terminal console is suppressed for a pure GUI experience).*
+> ⚠️ **Read this first:** locking a folder deletes the original unencrypted folder, and a successful unlock deletes the `.fsl` file. Keep a backup of anything irreplaceable, and never lose the password — without it the data cannot be recovered.
+
+### Features
+
+- **Authenticated encryption** — Fernet (AES-128-CBC with an HMAC-SHA256 tag) via the `cryptography` library; tampering with a `.fsl` is detected on unlock instead of silently producing corrupt output.
+- **Integrity-verified restore** — a manifest (`foldcrypt-manifest.json`: SHA-256 + size for every file, keyed by POSIX relative path) is embedded in the encrypted archive at lock time and fully verified after extraction. Archives locked by older versions (no manifest) still unlock normally, with verification skipped and reported.
+- **Salted, iterated key derivation** — PBKDF2-HMAC-SHA256, 480,000 iterations, fresh 16-byte `os.urandom` salt per lock, so the same password never derives the same key twice.
+- **Portable single file** — the `.fsl` is self-contained (salt prefixed, everything else encrypted) and OS-independent.
+- **Unobtrusive output** — on Windows the `.fsl` receives the system *hidden* attribute; on other platforms it is written with a leading dot (`.<folder>.fsl`).
+- **Refuses to destroy data** — locking refuses if a `.fsl` for that folder already exists or the folder contains the reserved manifest filename; unlocking refuses to overwrite an existing folder, and keeps the `.fsl` if integrity verification fails.
+- **Purpose-built GUI** — Tkinter interface with Lock/Unlock tabs, deterministic progress bar, show/hide password eye icons, auto-closing result dialogs, and (on Windows) Explorer selection of the produced item. Missing image assets degrade gracefully to text/emoji fallbacks.
 
 ---
 
-## 🔐 Security Design
+## Architecture
 
-FoldCrypt does not rely on folder permissions — the folder's bytes are actually
-encrypted. The pipeline in `main.py` (`lock_folder` / `unlock_file` / `get_key`) is:
+Everything lives in `main.py`: the cryptographic core (`get_key`, `lock_folder`, `unlock_file`, `build_manifest`, `verify_extracted`) is GUI-independent and headlessly testable; the Tkinter layer (`FoldCryptApp`) runs the core on a worker thread and reports progress through a callback.
 
-1. **Archive:** the folder is zipped (`shutil.make_archive`) into a temporary archive.
-2. **Key derivation:** your password is run through **PBKDF2HMAC-SHA256** with a fresh
-   16-byte random salt (`os.urandom`) and **480,000 iterations**, producing a 32-byte
-   key (URL-safe Base64-encoded, as Fernet expects).
-3. **Encryption:** the archive is encrypted with **Fernet** — AES-128-CBC with an
-   HMAC-SHA256 authentication tag, so tampering with the `.fsl` file is detected on
-   unlock instead of silently producing corrupt output.
-4. **Cleanup:** the temporary zip and the original folder are deleted, leaving only
-   the `.fsl` file.
+```mermaid
+flowchart LR
+    subgraph LOCK["Lock"]
+        A[Folder] --> B[build_manifest<br/>SHA-256 + size per file]
+        B --> C[ZIP archive<br/>+ foldcrypt-manifest.json]
+        C --> D[get_key<br/>PBKDF2-HMAC-SHA256<br/>480k iterations · 16-byte random salt]
+        D --> E[Fernet encrypt<br/>AES-128-CBC + HMAC-SHA256]
+        E --> F[".fsl file<br/>salt ‖ Fernet token · hidden"]
+        F --> G[Delete temp ZIP<br/>and original folder]
+    end
+    subgraph UNLOCK["Unlock"]
+        H[".fsl file"] --> I[Read salt · derive key]
+        I --> J{Fernet verify<br/>+ decrypt}
+        J -->|HMAC failure| X[❌ Incorrect password.<br/>Nothing extracted · .fsl kept]
+        J -->|OK| K[Extract ZIP]
+        K --> L{verify_extracted<br/>re-hash vs manifest}
+        L -->|missing / changed / extra| Y[❌ Integrity check FAILED<br/>.fsl kept · restored copy untrusted]
+        L -->|intact| M[✅ Folder restored<br/>.fsl deleted]
+    end
+    GUI[Tkinter GUI<br/>FoldCryptApp · worker thread] -. drives both pipelines .-> LOCK
+    GUI -. drives both pipelines .-> UNLOCK
+```
 
 ### `.fsl` file format
 
@@ -69,84 +73,121 @@ encrypted. The pipeline in `main.py` (`lock_folder` / `unlock_file` / `get_key`)
 └────────────────────┴───────────────────────────────────┘
 ```
 
-The salt is stored in the clear as the first 16 bytes — it is not secret; it only
-needs to be unique per lock so the same password never derives the same key twice.
-On Windows the `.fsl` file also gets the system *hidden* attribute; on other
-platforms it is written with a leading dot (`.<folder>.fsl`).
-
-A wrong password fails Fernet's HMAC verification, and the app reports
-*"Incorrect password. Access Denied."* — there is **no password recovery**, by design.
-
-> ⚠️ **Important:** locking a folder deletes the original unencrypted folder, and
-> unlocking deletes the `.fsl` file. Keep a backup of anything irreplaceable, and
-> never lose the password — without it the data cannot be recovered.
+The salt is stored in the clear as the first 16 bytes — it is not secret; it only needs to be unique per lock. Everything after it — including the ZIP archive and the integrity manifest — is inside the Fernet ciphertext.
 
 ---
 
-## 📁 Project Structure
+## Threat model
 
-| File | Purpose |
-| --- | --- |
-| `main.py` | The whole application — key derivation, lock/unlock engine, and the Tkinter GUI (`FoldCryptApp`) |
-| `requirements.txt` | Python dependencies (just `cryptography`) |
-| `logo.png` | App / window icon |
-| `eye_open.png` / `eye_closed.png` | Password-visibility toggle icons (text/emoji fallback if missing) |
-| `LICENSE` | MIT License |
-| `tests/test_lock_unlock.py` | Headless tests for the lock/unlock core (key derivation, encrypt/decrypt round-trip, wrong-password refusal) — no GUI needed |
+| Assets | Adversaries | Mitigations |
+|---|---|---|
+| Folder contents at rest (confidentiality) | Anyone who obtains the `.fsl` file — lost USB drive, shared cloud folder, copied backup | Fernet authenticated encryption (AES-128-CBC + HMAC-SHA256); the file reveals nothing without the password |
+| The password / derived key | Offline brute-force and dictionary attackers working on a stolen `.fsl` | PBKDF2-HMAC-SHA256 with 480,000 iterations and a fresh 16-byte random salt per lock; identical passwords in different locks derive unrelated keys |
+| Restored folder integrity | Bit rot, short writes, failing disks, partial extraction, tampering in transit or storage | SHA-256 + size manifest embedded *inside* the encrypted archive; unlock re-hashes every restored file and fails loudly — keeping the `.fsl` — on any missing, changed or unexpected file |
+| The encrypted blob itself | Anyone modifying the `.fsl` to corrupt or probe the contents | Fernet's HMAC-SHA256 tag is verified before decryption completes; a wrong password or a flipped bit produces "Incorrect password. Access Denied." and extracts nothing |
+| The user's only copy of the data | Accidents: overwriting, name collisions, half-finished operations | Lock refuses when a `.fsl` already exists or the reserved manifest name is present; unlock refuses to overwrite an existing folder and keeps the `.fsl` on any verification failure |
 
-## 🧪 Tests
+**Out of scope / honest limitations:** malware or a keylogger on the machine while the folder is unlocked or the password is typed; an attacker with access to the *unlocked* folder; weak passwords (PBKDF2 slows guessing, it cannot rescue `123456`); and the hidden attribute/dot-prefix, which is cosmetic unobtrusiveness, **not** a security control. Deletion of the original folder on lock is permanent — keep backups.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.8+ (standard library: `zipfile`, `hashlib`, `json`, `threading`, `pathlib`) |
+| GUI | Tkinter (`ttk` notebook, progress bar, file dialogs) — ships with Python |
+| Cryptography | `cryptography` ≥ 42.0.0 — Fernet (AES-128-CBC + HMAC-SHA256) and PBKDF2HMAC |
+| Integrity | SHA-256 manifest (`foldcrypt-manifest.json`, format version 1) embedded in the encrypted archive |
+| Tests | stdlib `unittest` — 11 headless tests, no GUI required |
+| License | MIT |
+
+---
+
+## Setup & run
+
+### Prerequisites
+
+- Python 3.8 or higher, with Tkinter (included in standard python.org and most OS Python installs).
+- The only third-party dependency is `cryptography`, declared in `requirements.txt`.
+
+### Install
+
+```bash
+git clone https://github.com/Manoj-2424150118/FoldCrypt.git
+cd FoldCrypt
+pip install -r requirements.txt
+```
+
+Keep `logo.png`, `eye_open.png` and `eye_closed.png` in the same directory as `main.py` — the GUI loads them from there (and falls back to text/emoji icons if they are missing).
+
+### Run
+
+```bash
+python main.py        # any platform
+pythonw main.py       # Windows: same, without a background console window
+```
+
+### Use
+
+**Lock a folder:** open the **Lock Folder** tab → **Browse** to the folder → enter the password twice (eye icons show/hide it) → **Lock**. The folder is archived, encrypted and replaced by the hidden `.fsl` in the same directory.
+
+**Unlock a folder:** open the **Unlock Folder** tab → **Browse** to the `.fsl` file → enter the exact password → **Unlock**. The blob is authenticated and decrypted, the folder is extracted and verified against its manifest, and only then is the `.fsl` removed.
+
+---
+
+## Testing
+
+The cryptographic core is tested headlessly — no GUI is launched:
 
 ```bash
 pip install -r requirements.txt
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v    # 11 tests
 ```
 
----
-
-## 🔒 How to Use
-
-### To Lock a Folder:
-1. Open the **Lock Folder** tab.
-2. Click **Browse** and select the folder you want to secure.
-3. Enter your desired password in both fields (you can click the eye icon to verify).
-4. Click **Lock**. 
-5. The application will compress your folder, encrypt it, securely delete the original unencrypted files, and output a hidden `.fsl` file in the exact same directory. 
-
-### To Unlock a Folder:
-1. Open the **Unlock Folder** tab.
-2. Click **Browse** and select your `.fsl` file.
-3. Enter the exact password used to lock it.
-4. Click **Unlock**.
-5. The application will decrypt the file, extract the original folder, and securely remove the `.fsl` file.
+| Test file | Covers |
+|---|---|
+| `tests/test_lock_unlock.py` (5 tests) | Key derivation (deterministic per password+salt, salt/password sensitivity, 32-byte key); full lock→unlock round-trip restoring exact bytes; wrong password refused with the `.fsl` kept; lock refused when a `.fsl` already exists |
+| `tests/test_integrity_manifest.py` (6 tests) | Manifest build/verify units; tampered, missing and unexpected-extra file detection; reserved manifest-name refusal; full round-trip leaving no manifest behind; legacy (pre-manifest) archives still unlock |
 
 ---
 
-## 🖼️ UI Assets & Customization
-FoldCrypt dynamically loads `.png` assets to render its UI. 
-- **`logo.png`**: Loaded natively into the Window title bar and taskbar (auto-scaled).
-- **`eye_open.png` / `eye_closed.png`**: Custom interactive icons for the password entry masking.
+## Project structure
 
-If these images are missing, FoldCrypt seamlessly falls back to standard text and unicode emojis (`👁️`, `🔒`, etc.) ensuring the app never breaks.
-
-## ❓ Troubleshooting
-
-- **"A locked file for this folder already exists."** — a `.fsl` file with the same
-  folder name is already in that directory. Unlock or move it before locking again.
-- **"A folder named '…' already exists here."** — unlocking would overwrite an
-  existing folder, so FoldCrypt refuses. Move or rename that folder first.
-- **"Incorrect password. Access Denied."** — the password doesn't match the one used
-  to lock the file (Fernet HMAC verification failed). Passwords are case-sensitive
-  and there is no reset option.
-- **The window opens without icons** — make sure `logo.png`, `eye_open.png`, and
-  `eye_closed.png` sit next to `main.py`; the UI falls back to text/emoji icons if
-  they are missing.
+| File | Purpose |
+|---|---|
+| `main.py` | The whole application — key derivation, manifest build/verify, lock/unlock engine, and the Tkinter GUI (`FoldCryptApp`) |
+| `requirements.txt` | Python dependencies (just `cryptography`) |
+| `logo.png` | App / window icon |
+| `eye_open.png` / `eye_closed.png` | Password-visibility toggle icons (text/emoji fallback if missing) |
+| `tests/test_lock_unlock.py` | Headless lock/unlock core tests |
+| `tests/test_integrity_manifest.py` | Headless integrity-manifest tests |
+| `LICENSE` | MIT License |
 
 ---
 
-## 🛠️ Built With
-* [Python 3](https://www.python.org/) - Core logic
-* [Tkinter](https://docs.python.org/3/library/tkinter.html) - Graphical User Interface
-* [Cryptography](https://cryptography.io/en/latest/) - AES Fernet Encryption Engine
+## Troubleshooting
 
-## 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **"A locked file for this folder already exists."** — a `.fsl` file with the same folder name is already in that directory. Unlock or move it before locking again.
+- **"A folder named '…' already exists here."** — unlocking would overwrite an existing folder, so FoldCrypt refuses. Move or rename that folder first.
+- **"Incorrect password. Access Denied."** — the password doesn't match the one used to lock the file (Fernet HMAC verification failed). Passwords are case-sensitive and there is no reset option.
+- **"Integrity check FAILED…"** — the restored files do not match the lock-time manifest (missing, changed or extra files). The `.fsl` has been kept; do not rely on the restored copy — unlock again from an undamaged `.fsl`.
+- **"'foldcrypt-manifest.json' is reserved…"** — a file with the manifest's name sits at the top of the folder you tried to lock. Rename it and retry.
+- **The window opens without icons** — make sure `logo.png`, `eye_open.png` and `eye_closed.png` sit next to `main.py`; the UI falls back to text/emoji icons if they are missing.
+
+---
+
+## Security
+
+FoldCrypt's security design is documented above (architecture, `.fsl` format, threat model). Its guarantees rest on the `cryptography` library's Fernet and PBKDF2 implementations — FoldCrypt rolls no primitives of its own.
+
+**Reporting a vulnerability:** please do not open a public issue for a security flaw. Report it privately following the maintainer's security policy in **[SECURITY.md](SECURITY.md)** (GitHub private vulnerability reporting). Two standing cautions bear repeating: there is **no password recovery**, and locking **permanently deletes the original folder** — FoldCrypt is a locker, not a backup tool.
+
+## Author
+
+**Manoj Kumar Sharma** — Cybersecurity & Software Professional · Jaipur, India
+MCA, Manipal University Jaipur · EC-Council Ethical Hacking Essentials · Google Cybersecurity Professional Certificate
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
