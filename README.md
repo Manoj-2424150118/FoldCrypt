@@ -6,6 +6,7 @@ Instead of just changing system permissions, FoldCrypt physically zips and encry
 
 ## ✨ Features
 * **Bank-Grade Encryption:** Uses python's `cryptography` library for AES encryption and PBKDF2 hashing.
+* **Integrity-Verified Restore:** Every lock embeds a SHA-256 manifest of the folder's files inside the encrypted archive. Unlock re-hashes every restored file against it and fails loudly — keeping the `.fsl` — if anything is missing, changed, or unexpected, instead of handing back a subtly wrong folder with a "success" message. Archives locked by older versions (no manifest) still unlock normally.
 * **In-Place Archiving:** Instantly zips folders and converts them into a single, encrypted `.fsl` file.
 * **Portability:** Your encrypted `.fsl` file can be safely moved to a USB drive, another computer, or cloud storage. It will decrypt flawlessly anywhere as long as you have the password.
 * **Invisible by Default:** Automatically applies system-level hidden attributes to the locked `.fsl` files to keep them completely out of sight.

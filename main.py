@@ -2,7 +2,10 @@ import os
 import sys
 import shutil
 import base64
+import hashlib
+import json
 import threading
+import zipfile
 import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
@@ -32,6 +35,57 @@ def hide_file(path):
             ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
         except Exception:
             pass
+
+# Integrity manifest: at lock time every file's SHA-256 + size is
+# recorded in a manifest stored inside the encrypted archive. Fernet's
+# HMAC proves the archive blob is untouched, but it cannot prove the
+# *extracted tree* is complete and correct — a short write, a failing
+# disk or a partial extraction would otherwise hand back a subtly
+# wrong folder with a "success" message. The manifest closes that gap:
+# unlock re-hashes every restored file and fails loudly on any drift.
+MANIFEST_NAME = "foldcrypt-manifest.json"
+MANIFEST_VERSION = 1
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def build_manifest(source_folder: Path) -> dict:
+    """Map every file under source_folder to its SHA-256 + size,
+    keyed by POSIX-style relative path (stable across OSes)."""
+    files = {}
+    for path in sorted(source_folder.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(source_folder).as_posix()
+            files[rel] = {"sha256": _sha256_of(path), "size": path.stat().st_size}
+    return {"version": MANIFEST_VERSION, "files": files}
+
+def verify_extracted(dest_folder: Path, manifest: dict) -> list:
+    """Compare an extracted folder against its lock-time manifest.
+    Returns human-readable problems (empty list = intact): files that
+    are missing, files whose content changed, unexpected extra files."""
+    expected = manifest.get("files", {})
+    problems = []
+    actual = {}
+    for path in sorted(dest_folder.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(dest_folder).as_posix()
+            if rel == MANIFEST_NAME:
+                continue
+            actual[rel] = path
+    for rel, meta in expected.items():
+        path = actual.get(rel)
+        if path is None:
+            problems.append(f"missing after extraction: {rel}")
+        elif path.stat().st_size != meta.get("size") or _sha256_of(path) != meta.get("sha256"):
+            problems.append(f"content changed: {rel}")
+    for rel in actual:
+        if rel not in expected:
+            problems.append(f"unexpected extra file: {rel}")
+    return problems
 
 class AutoCloseDialog(tk.Toplevel):
     def __init__(self, parent, title, message, timeout=5, is_error=False):
@@ -85,6 +139,9 @@ def lock_folder(source_folder: Path, password: str, update_progress):
     if output_file.exists():
         raise Exception("A locked file for this folder already exists.")
 
+    if (source_folder / MANIFEST_NAME).is_file():
+        raise Exception(f"'{MANIFEST_NAME}' is reserved for FoldCrypt's integrity manifest. Please rename that file in the folder and try again.")
+
     update_progress(15, "Zipping folder (This may take a moment)...")
     temp_zip = parent_dir / f"{folder_name}_temp.zip"
     shutil.make_archive(
@@ -92,7 +149,12 @@ def lock_folder(source_folder: Path, password: str, update_progress):
         format='zip',
         root_dir=source_folder
     )
-    
+
+    update_progress(30, "Building integrity manifest...")
+    manifest = build_manifest(source_folder)
+    with zipfile.ZipFile(temp_zip, "a") as zf:
+        zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=1, sort_keys=True))
+
     update_progress(40, "Generating secure key...")
     salt = os.urandom(16)
     key = get_key(password, salt)
@@ -156,7 +218,25 @@ def unlock_file(source_file: Path, password: str, update_progress):
         
     os.makedirs(dest_folder)
     shutil.unpack_archive(temp_zip, extract_dir=dest_folder, format='zip')
-    
+
+    update_progress(85, "Verifying file integrity...")
+    manifest_path = dest_folder / MANIFEST_NAME
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            problems = verify_extracted(dest_folder, manifest)
+        except Exception:
+            os.remove(temp_zip)
+            raise Exception("Integrity manifest could not be read or verified — the restored folder cannot be trusted. The locked file has been kept.")
+        manifest_path.unlink()
+        if problems:
+            os.remove(temp_zip)
+            shown = "; ".join(problems[:5])
+            more = f" (+{len(problems) - 5} more)" if len(problems) > 5 else ""
+            raise Exception(f"Integrity check FAILED — restored files do not match what was locked: {shown}{more}. The locked file has been kept; do not rely on the restored copy.")
+    else:
+        update_progress(88, "Legacy archive (no integrity manifest) — skipping verification.")
+
     update_progress(95, "Cleaning up...")
     os.remove(temp_zip)
     os.remove(source_file)
