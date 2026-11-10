@@ -10,11 +10,22 @@ FoldCrypt is a cross-platform desktop locker written in Python. It does not rely
 
 **Repository:** [github.com/Manoj-2424150118/FoldCrypt](https://github.com/Manoj-2424150118/FoldCrypt) · **License:** MIT · **Platforms:** Windows, Linux, macOS (Python 3.8+)
 
+<p align="center"><img src="docs/foldcrypt-ui.png" alt="The FoldCrypt desktop app" width="620"/></p>
+
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)
 ![Cryptography](https://img.shields.io/badge/Cryptography-Fernet%20·%20PBKDF2-2f6f4e)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 ---
+
+## Quickstart
+
+```bash
+git clone https://github.com/Manoj-2424150118/FoldCrypt.git
+cd FoldCrypt
+pip install -r requirements.txt
+python main.py
+```
 
 ## Overview
 
