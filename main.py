@@ -1,3 +1,14 @@
+"""FoldCrypt — encrypt folders with AES (Fernet), PBKDF2 KDF & SHA-256 manifests.
+
+Lock flow: zip the folder, record a SHA-256 + size manifest of every file,
+derive a Fernet key from the password (PBKDF2-HMAC-SHA256, 480,000
+iterations, fresh 16-byte salt), encrypt the zip, and write a ``.fsl`` file
+(16-byte salt followed by the Fernet blob). The original folder is deleted.
+Unlock flow: derive the same key, decrypt, extract, and re-hash every
+restored file against the manifest — any drift fails loudly and the locked
+file is kept. A Tkinter GUI (FoldCryptApp) wraps the same two functions.
+"""
+
 import os
 import sys
 import shutil
@@ -19,6 +30,13 @@ except ImportError:
     sys.exit(1)
 
 def get_key(password: str, salt: bytes) -> bytes:
+    """Derive a Fernet-compatible key from a password and salt.
+
+    PBKDF2-HMAC-SHA256, 32-byte output, 480,000 iterations; the result is
+    URL-safe base64-encoded as Fernet requires. Same password + salt
+    always yields the same key; a different salt (fresh 16 random bytes
+    per lock) yields a different key.
+    """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -28,6 +46,11 @@ def get_key(password: str, salt: bytes) -> bytes:
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
 def hide_file(path):
+    """Mark a file hidden on Windows (FILE_ATTRIBUTE_HIDDEN); no-op elsewhere.
+
+    Failures are swallowed on purpose — hiding is cosmetic and must never
+    break a lock/unlock that has already succeeded.
+    """
     if os.name == 'nt':
         try:
             import ctypes
@@ -47,6 +70,7 @@ MANIFEST_NAME = "foldcrypt-manifest.json"
 MANIFEST_VERSION = 1
 
 def _sha256_of(path: Path) -> str:
+    """SHA-256 hex digest of a file, streamed in 1 MiB chunks."""
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -88,6 +112,12 @@ def verify_extracted(dest_folder: Path, manifest: dict) -> list:
     return problems
 
 class AutoCloseDialog(tk.Toplevel):
+    """A small centred result dialog that closes itself after ``timeout`` seconds.
+
+    Shows a green tick (success) or red cross (error) plus the message, with
+    a countdown button the user can also click to dismiss early.
+    """
+
     def __init__(self, parent, title, message, timeout=5, is_error=False):
         super().__init__(parent)
         self.title(title)
@@ -114,6 +144,7 @@ class AutoCloseDialog(tk.Toplevel):
         self.update_timer()
         
     def update_timer(self):
+        """Tick the countdown once a second; destroy the dialog at zero."""
         if not self.winfo_exists():
             return
         if self.timeout > 0:
@@ -124,9 +155,20 @@ class AutoCloseDialog(tk.Toplevel):
             self.destroy()
 
 def show_popup(parent, title, message, is_error=False):
+    """Show a 5-second auto-closing result dialog (red styling on error)."""
     AutoCloseDialog(parent, title, message, timeout=5, is_error=is_error)
 
 def lock_folder(source_folder: Path, password: str, update_progress):
+    """Lock a folder into a single encrypted ``.fsl`` file and delete the original.
+
+    Steps: zip the folder, build the SHA-256 integrity manifest and append
+    it to the zip, derive the key from the password with a fresh salt,
+    Fernet-encrypt the zip, and write ``salt + ciphertext`` to
+    ``<name>.fsl`` (``.<name>.fsl`` on non-Windows, hidden on Windows).
+    Raises if a locked file for the folder already exists or the folder
+    contains a file named ``foldcrypt-manifest.json`` (reserved).
+    ``update_progress`` is a ``(percent, text)`` callback for the GUI.
+    """
     update_progress(5, "Preparing...")
     parent_dir = source_folder.parent
     folder_name = source_folder.name
@@ -185,6 +227,16 @@ def lock_folder(source_folder: Path, password: str, update_progress):
 
 
 def unlock_file(source_file: Path, password: str, update_progress):
+    """Decrypt a ``.fsl`` file and restore the original folder next to it.
+
+    Derives the key from the password and the salt stored in the file's
+    first 16 bytes; a wrong password raises "Incorrect password". After
+    extraction every restored file is re-hashed against the lock-time
+    manifest — on any mismatch the restored copy is left untrusted and the
+    locked file is kept. Archives made before manifests existed are
+    restored without verification. The ``.fsl`` file is deleted on success.
+    ``update_progress`` is a ``(percent, text)`` callback for the GUI.
+    """
     update_progress(5, "Preparing...")
     parent_dir = source_file.parent
     folder_name = source_file.stem
