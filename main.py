@@ -119,6 +119,7 @@ class AutoCloseDialog(tk.Toplevel):
     """
 
     def __init__(self, parent, title, message, timeout=5, is_error=False):
+        """Build the centred dialog and start the countdown to auto-close."""
         super().__init__(parent)
         self.title(title)
         self.geometry("350x180")
@@ -301,7 +302,15 @@ def unlock_file(source_file: Path, password: str, update_progress):
 
 
 class FoldCryptApp:
+    """Tkinter front end: Lock/Unlock tabs, progress bar, and job threading.
+
+    Crypto work runs on a daemon worker thread (see ``start_job``) so the
+    UI stays responsive; all widget updates from that thread go through
+    ``update_progress_ui`` / ``root.after`` back onto the main thread.
+    """
+
     def __init__(self, root):
+        """Build the window, both tabs, and the shared progress bar."""
         self.root = root
         
         # Apply modern Google Font globally across the entire application interface
@@ -366,6 +375,12 @@ class FoldCryptApp:
         self.progress.pack(fill="x", pady=5)
         
     def _create_eye(self, parent, entry):
+        """Return a press-and-hold eye icon that reveals ``entry``'s password.
+
+        The password is shown only while the mouse button is held down and
+        masked again on release. Falls back to a lock/eye emoji label when
+        the ``eye_open.png`` / ``eye_closed.png`` assets are missing.
+        """
         eye = tk.Label(parent, cursor="hand2")
         
         # Load the custom eye icons
@@ -405,6 +420,7 @@ class FoldCryptApp:
         return eye
         
     def handle_return_key(self, event):
+        """Run the active tab's action when Enter is pressed anywhere."""
         current_tab = self.notebook.index(self.notebook.select())
         if current_tab == 0:
             self.lock_action()
@@ -412,14 +428,17 @@ class FoldCryptApp:
             self.unlock_action()
             
     def reset_progress_on_interaction(self, event=None):
+        """Clear a finished-job status line as soon as the user types or clicks."""
         if "Finished" in self.status_var.get():
             self.update_progress_ui(0, "")
             
     def on_closing(self):
+        """Quit immediately, killing any still-running daemon worker thread."""
         self.root.destroy()
         os._exit(0)
         
     def setup_lock_tab(self):
+        """Build the Lock tab: folder picker, password + confirm, Lock button."""
         # Create a container frame that automatically centers itself in the tab
         container = tk.Frame(self.frame_lock)
         container.pack(expand=True)
@@ -448,6 +467,7 @@ class FoldCryptApp:
                   command=self.lock_action).grid(row=3, column=0, columnspan=3, pady=20)
                   
     def setup_unlock_tab(self):
+        """Build the Unlock tab: .fsl file picker, password, Unlock button."""
         # Create a container frame that automatically centers itself in the tab
         container = tk.Frame(self.frame_unlock)
         container.pack(expand=True)
@@ -469,19 +489,23 @@ class FoldCryptApp:
                   command=self.unlock_action).grid(row=2, column=0, columnspan=3, pady=20)
 
     def browse_lock_folder(self):
+        """Let the user pick the folder to lock; ignore a cancelled dialog."""
         folder = filedialog.askdirectory(title="Select Folder to Lock")
         if folder:
             self.lock_folder_var.set(folder)
             
     def browse_unlock_file(self):
+        """Let the user pick a .fsl file to unlock; ignore a cancelled dialog."""
         file = filedialog.askopenfilename(title="Select .fsl File", filetypes=[("FoldCrypt Locked", "*.fsl"), ("All files", "*.*")])
         if file:
             self.unlock_file_var.set(file)
 
     def update_progress_ui(self, percent, text):
+        """Thread-safe progress update: marshal ``_set_progress`` onto the UI thread."""
         self.root.after(0, self._set_progress, percent, text)
-        
+
     def _set_progress(self, percent, text):
+        """Apply a progress update on the UI thread (bar + status line)."""
         self.progress_percent.set(percent)
         if percent == 0 and text == "":
             self.status_var.set("Progress:")
@@ -491,6 +515,12 @@ class FoldCryptApp:
             self.status_var.set(f"Progress: {percent}% - {text}")
 
     def start_job(self, target_func, success_msg):
+        """Run ``target_func`` on a daemon worker thread; report via popups.
+
+        Success and failure are marshalled back onto the UI thread with
+        ``root.after`` — Tkinter widgets must never be touched from the
+        worker directly.
+        """
         self.update_progress_ui(0, "Starting...")
         
         def worker():
@@ -503,13 +533,20 @@ class FoldCryptApp:
         threading.Thread(target=worker, daemon=True).start()
         
     def on_job_success(self, msg):
+        """Show the success dialog (runs on the UI thread via ``after``)."""
         show_popup(self.root, "Success", msg, is_error=False)
-        
+
     def on_job_error(self, err_msg):
+        """Reset the progress bar and show the error dialog (UI thread)."""
         self.update_progress_ui(0, "")
         show_popup(self.root, "Error", err_msg, is_error=True)
 
     def lock_action(self):
+        """Validate the Lock tab inputs, then encrypt the folder in the background.
+
+        Rejects a missing/invalid folder and empty or mismatched passwords
+        with an error popup; clears the fields once the job is dispatched.
+        """
         folder_str = self.lock_folder_var.get().strip()
         pwd = self.lock_pwd.get()
         pwd_conf = self.lock_pwd_confirm.get()
@@ -533,6 +570,11 @@ class FoldCryptApp:
         self.lock_pwd_confirm.set("")
 
     def unlock_action(self):
+        """Validate the Unlock tab inputs, then decrypt the .fsl file in the background.
+
+        Rejects a missing/not-a-file selection and an empty password with an
+        error popup; clears the fields once the job is dispatched.
+        """
         source_str = self.unlock_file_var.get().strip()
         pwd = self.unlock_pwd.get()
         
